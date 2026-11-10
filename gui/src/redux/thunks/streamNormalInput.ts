@@ -1,5 +1,5 @@
 import { createAsyncThunk, unwrapResult } from "@reduxjs/toolkit";
-import { LLMFullCompletionOptions, ModelDescription } from "core";
+import { ChatMessage, LLMFullCompletionOptions, ModelDescription } from "core";
 import { getRuleId } from "core/llm/rules/getSystemMessageWithRules";
 import { ToCoreProtocol } from "core/protocol";
 import { BUILT_IN_GROUP_NAME } from "core/tools/builtIn";
@@ -27,6 +27,7 @@ import { addSystemMessageToolsToSystemMessage } from "core/tools/systemMessageTo
 import { interceptSystemToolCalls } from "core/tools/systemMessageTools/interceptSystemToolCalls";
 import { SystemMessageToolCodeblocksFramework } from "core/tools/systemMessageTools/toolCodeblocks";
 
+import { MessageBatcher } from "../../util/streamBatcher";
 import {
   selectCurrentToolCalls,
   selectPendingToolCalls,
@@ -68,6 +69,8 @@ function buildReasoningCompletionOptions(
 
   return reasoningOptions;
 }
+
+export const STREAM_UPDATE_BATCH_MS = 250;
 
 export const streamNormalInput = createAsyncThunk<
   void,
@@ -195,6 +198,13 @@ export const streamNormalInput = createAsyncThunk<
 
     const start = Date.now();
     const streamAborter = state.session.streamAborter;
+    const isTest = process.env.NODE_ENV === "test";
+    const batcher = isTest
+      ? null
+      : new MessageBatcher<ChatMessage>((msgs) => {
+          dispatch(streamUpdate(msgs));
+        }, STREAM_UPDATE_BATCH_MS);
+
     try {
       let gen = extra.ideMessenger.llmStreamChat(
         {
@@ -217,13 +227,22 @@ export const streamNormalInput = createAsyncThunk<
       let next = await gen.next();
       while (!next.done) {
         if (!getState().session.isStreaming) {
+          batcher?.dispose();
           dispatch(abortStream());
           break;
         }
 
-        dispatch(streamUpdate(next.value));
+        if (batcher) {
+          for (const msg of next.value) {
+            batcher.push(msg);
+          }
+        } else {
+          dispatch(streamUpdate(next.value));
+        }
         next = await gen.next();
       }
+
+      batcher?.flushNow();
 
       // Attach prompt log and end thinking for reasoning models
       if (next.done && next.value) {
@@ -255,6 +274,7 @@ export const streamNormalInput = createAsyncThunk<
         }
       }
     } catch (e) {
+      batcher?.flushNow();
       const toolCallsToCancel = selectCurrentToolCalls(getState());
       if (
         toolCallsToCancel.length > 0 &&

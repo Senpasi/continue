@@ -35,6 +35,44 @@ export function getContextItemsFromHistory(
   return [...pastNormalContextItems, ...pastToolbarContextItems];
 }
 
+export function collectContextUrisForItem(
+  historyItems: ChatHistoryItem[],
+  priorToIndex?: number,
+): string[] {
+  const upper = priorToIndex ?? historyItems.length - 1;
+  const last = Math.min(upper, historyItems.length - 1);
+  const uris: string[] = [];
+
+  for (let i = 0; i <= last; i++) {
+    const item = historyItems[i];
+
+    const contextItems = item.contextItems;
+    if (contextItems) {
+      for (const ctxItem of contextItems) {
+        if (ctxItem.uri?.type === "file" && ctxItem.uri?.value) {
+          uris.push(ctxItem.uri.value);
+        }
+      }
+    }
+
+    const editorState = item.editorState;
+    if (editorState && Array.isArray(editorState.content)) {
+      for (const content of editorState.content) {
+        const uri = content?.attrs?.item?.uri;
+        if (
+          content?.type === CodeBlock.name &&
+          uri?.type === "file" &&
+          uri?.value
+        ) {
+          uris.push(uri.value);
+        }
+      }
+    }
+  }
+
+  return uris;
+}
+
 /*
     Get file symbols for given context items
     Overwrite symbols for existing file matches

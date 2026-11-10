@@ -3,7 +3,7 @@ import {
   ChatBubbleOvalLeftIcon,
 } from "@heroicons/react/24/outline";
 import { Editor, JSONContent } from "@tiptap/react";
-import { ChatHistoryItem, InputModifiers } from "core";
+import { ChatHistoryItem, ContextItem, InputModifiers } from "core";
 import { renderChatMessage } from "core/util/messageContent";
 import {
   useCallback,
@@ -46,14 +46,15 @@ import { ToolCallDiv } from "./ToolCallDiv";
 import { useStore } from "react-redux";
 import FeedbackDialog from "../../components/dialogs/FeedbackDialog";
 
-import { DeprecationBanner } from "../../components/DeprecationBanner";
 import { FatalErrorIndicator } from "../../components/config/FatalErrorNotice";
+import { DeprecationBanner } from "../../components/DeprecationBanner";
 import InlineErrorMessage from "../../components/mainInput/InlineErrorMessage";
-import { resolveEditorContent } from "../../components/mainInput/TipTapEditor/utils/resolveEditorContent";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
 import { cancelStream } from "../../redux/thunks/cancelStream";
+import { STREAM_UPDATE_BATCH_MS } from "../../redux/thunks/streamNormalInput";
 import { getLocalStorage, setLocalStorage } from "../../util/localStorage";
+import { MessageBatcher } from "../../util/streamBatcher";
 import { EmptyChatBody } from "./EmptyChatBody";
 import { ExploreDialogWatcher } from "./ExploreDialogWatcher";
 import { useAutoScroll } from "./useAutoScroll";
@@ -116,6 +117,9 @@ export function Chat() {
   const mainTextInputRef = useRef<HTMLInputElement>(null);
   const stepsDivRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
+  const toolOutputBatchers = useRef<Map<string, MessageBatcher<ContextItem[]>>>(
+    new Map(),
+  );
   const history = useAppSelector((state) => state.session.history);
   const showChatScrollbar = useAppSelector(
     (state) => state.config.config.ui?.showChatScrollbar,
@@ -233,6 +237,8 @@ export function Chat() {
   useWebviewListener(
     "newSession",
     async () => {
+      toolOutputBatchers.current.forEach((b) => b.dispose());
+      toolOutputBatchers.current.clear();
       // unwrapResult(response) // errors if session creation failed
       mainTextInputRef.current?.focus?.();
     },
@@ -243,13 +249,23 @@ export function Chat() {
   useWebviewListener(
     "toolCallPartialOutput",
     async (data) => {
-      // Update tool call output in Redux store
-      dispatch(
-        updateToolCallOutput({
-          toolCallId: data.toolCallId,
-          contextItems: data.contextItems,
-        }),
-      );
+      let batcher = toolOutputBatchers.current.get(data.toolCallId);
+      if (!batcher) {
+        batcher = new MessageBatcher<ContextItem[]>((batches) => {
+          // batches.length === 1, т.к. push добавляет один массив contextItems;
+          // редьюсер ждёт единственный массив contextItems на toolCallId.
+          const contextItems = batches.flatMap((b) => b);
+          dispatch(
+            updateToolCallOutput({
+              toolCallId: data.toolCallId,
+              contextItems,
+            }),
+          );
+          toolOutputBatchers.current.delete(data.toolCallId);
+        }, STREAM_UPDATE_BATCH_MS);
+        toolOutputBatchers.current.set(data.toolCallId, batcher);
+      }
+      batcher.push(data.contextItems);
     },
     [dispatch],
   );

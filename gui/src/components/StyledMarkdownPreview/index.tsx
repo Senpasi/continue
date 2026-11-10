@@ -1,5 +1,6 @@
 import { ctxItemToRifWithContents } from "core/commands/util";
 import { memo, useEffect, useMemo, useRef } from "react";
+import { useStore } from "react-redux";
 import { useRemark } from "react-remark";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
@@ -15,7 +16,11 @@ import {
 import useUpdatingRef from "../../hooks/useUpdatingRef";
 import { useAppSelector } from "../../redux/hooks";
 import { selectUIConfig } from "../../redux/slices/configSlice";
-import { getContextItemsFromHistory } from "../../redux/thunks/updateFileSymbols";
+import { RootState } from "../../redux/store";
+import {
+  collectContextUrisForItem,
+  getContextItemsFromHistory,
+} from "../../redux/thunks/updateFileSymbols";
 import { getFontSize } from "../../util";
 import { ToolTip } from "../gui/Tooltip";
 import FilenameLink from "./FilenameLink";
@@ -195,8 +200,15 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
   // The logic here is to get file names from
   // 1. Context items found in past messages
   // 2. Toolbar Codeblocks found in past messages
-  const history = useAppSelector((state) => state.session.history);
+  const reduxStore = useStore<RootState>();
   const allSymbols = useAppSelector((state) => state.session.symbols);
+  const ctxSig = useAppSelector((state) =>
+    props.itemIndex === undefined
+      ? ""
+      : collectContextUrisForItem(state.session.history, props.itemIndex).join(
+          ",",
+        ),
+  );
   const pastFileInfo = useMemo(() => {
     const index = props.itemIndex;
     if (index === undefined) {
@@ -205,6 +217,7 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
         rifs: [],
       };
     }
+    const history = reduxStore.getState().session.history;
     const pastContextItems = getContextItemsFromHistory(history, index);
     const rifs = pastContextItems.map((item) =>
       ctxItemToRifWithContents(item, true),
@@ -218,7 +231,8 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
       symbols,
       rifs,
     };
-  }, [props.itemIndex, history, allSymbols]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.itemIndex, ctxSig, allSymbols]);
   const pastFileInfoRef = useUpdatingRef(pastFileInfo);
   const itemIndexRef = useUpdatingRef(props.itemIndex);
 
